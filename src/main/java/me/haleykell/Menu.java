@@ -1,18 +1,24 @@
 package me.haleykell;
 
-import me.haleykell.userdata.Password;
-import me.haleykell.userdata.Username;
-import me.haleykell.userdata.Website;
+import me.haleykell.userdata.User;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Scanner;
 
 /**
  * Menu class, contains main functionality of the program
+ *
  * @author Haley Kell
  */
 
 public class Menu {
+
+    // TODO: error/exception handling
 
     private static final int GET_INFO = 1;
     private static final int ADD_WEBSITE = 2;
@@ -22,55 +28,64 @@ public class Menu {
     private static final int QUIT = 8;
     private static final int PRINT_ALL = 7;
     private static final int DELETE_ALL = 6;
+    private Connection connection;
+    private Scanner input;
+    private User user;
 
-    /** Constructor */
-    public Menu() {}
+    /**
+     * Constructor
+     */
+    public Menu(Connection connection, Scanner input, User user) {
+        this.connection = connection;
+        this.input = input;
+        this.user = user;
+    }
 
     /**
      * Calls showMenu() and appropriate method based on response
-     * @param dataList list of websites from file
-     * @param input keyboard
      */
-    public void menu(ArrayList<Website> dataList, Scanner input) {
-        int response = showMenu(input);
+    public void menu() throws SQLException {
+        int response = showMenu();
 
         while (response != QUIT) {
             switch (response) {
                 case GET_INFO:
-                    getInfo(dataList, input);
+                    getInfo();
                     break;
                 case ADD_WEBSITE:
-                    addWebsite(dataList, input);
+                    addWebsite();
                     break;
                 case DELETE_WEBSITE:
-                    deleteWebsite(dataList, input);
+                    deleteWebsite();
                     break;
                 case CHANGE_USER:
-                    changeUsername(dataList, input);
+                    changeUsername();
                     break;
                 case CHANGE_PASS:
-                    changePassword(dataList, input);
+                    changePassword();
                     break;
                 case DELETE_ALL:
-                    deleteAll(dataList, input);
+                    deleteAll();
                     break;
                 case PRINT_ALL:
-                    printAllWebsites(dataList);
+                    printAllWebsites();
                     break;
-
+                default:
+                    System.out.println("Please try again.");
+                    break;
             }
-            response = showMenu(input);
+            response = showMenu();
         }
 
     }
 
     /**
      * Displays menu and receives response
-     * @param input keyboard
+     *
      * @return response of user
      */
-    private int showMenu(Scanner input) {
-        System.out.println("Welcome to PasswordManager!");
+    private int showMenu() {
+        System.out.println("\nWelcome to PasswordManager!");
         System.out.println("Choose from the following options:");
         System.out.println("1. Get a username and password for a website.");
         System.out.println("2. Add a website's username and password to the database.");
@@ -86,156 +101,268 @@ public class Menu {
         return response;
     }
 
+    public void printAllWebsites() throws SQLException {
+        System.out.println("\nWebsites:");
+        System.out.println("---------");
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT * FROM website_data\n" +
+                "LEFT JOIN passwords p on website_data.website_data_id = p.website_data_id\n" +
+                "LEFT JOIN users u on p.user_id = u.id\n" +
+                "WHERE u.id like (?)")) {
+            stmt.setInt(1, this.user.getId());
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) {
+                System.out.println("Website: " + rs.getString("website") + "\nUsername: " + rs.getString("username") + "\n");
+            }
+        }
+    }
+
     /**
      * Displays username and password for a given website
-     * @param data list of websites from file
-     * @param input keyboard
      */
-    private void getInfo(ArrayList<Website> data, Scanner input) {
-        System.out.println();
-        System.out.println("For what website would you like the username and password?");
-        for (Website w : data) { System.out.println(w.toString()); }
-        String response = input.next();
+    private void getInfo() throws SQLException {
+        printAllWebsites();
 
-        for (Website w : data) {
-            if (response.equalsIgnoreCase(w.toString())) { System.out.println(w.toStringUserPass()); }
+        System.out.println("What website do you want to look up?");
+        String website = input.next();
+        System.out.println("What is the username?");
+        String username = input.next();
+
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT password FROM website_data\n" +
+                "LEFT JOIN passwords p on website_data.website_data_id = p.website_data_id\n" +
+                "LEFT JOIN users u on p.user_id = u.id\n" +
+                "WHERE website like (?) AND u.id like (?) AND website_data.username like (?)")) {
+            stmt.setString(1, website);
+            stmt.setInt(2, this.user.getId());
+            stmt.setString(3, username);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                // TODO: decryption
+                System.out.println("password: " + rs.getString("password"));
+            } else System.out.println("No passwords found.");
+        } catch (SQLException e) {
+            System.out.println("Error while retrieving password.");
+            throw e;
         }
-        System.out.println();
     }
 
     /**
      * Adds a website and its info to the list
-     * @param data list of websites from file
-     * @param input keyboard
      */
-    private void addWebsite(ArrayList<Website> data, Scanner input) {
+    private void addWebsite() throws SQLException {
         System.out.println();
-        System.out.println("What is the name of the website?");
+        System.out.print("What is the name of the website?\nwebsite: ");
         String website = input.next();
-        System.out.println("What is the username?");
-        String user = input.next();
+        System.out.print("What is the username?\nusername: ");
+        String username = input.next();
+        String password;
+        int websiteDataId = 0;
 
-        for (Website web : data) {
-            if (web.toString().equalsIgnoreCase(website) && web.getUsername().toString().equalsIgnoreCase(user)) {
-                System.out.println("This website and username already exist. Would you like to update the password?");
-                if (input.next().equalsIgnoreCase("yes")) {
-                    System.out.println("What is the new password?");
-                    String pass = input.next();
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT * FROM website_data\n" +
+                "LEFT JOIN passwords p on website_data.website_data_id = p.website_data_id\n" +
+                "LEFT JOIN users u on p.user_id = u.id\n" +
+                "WHERE u.id like (?) AND website like (?) AND website_data.username like (?)")) {
+            stmt.setInt(1, this.user.getId());
+            stmt.setString(2, website);
+            stmt.setString(3, username);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                if (rs.getString("username").equalsIgnoreCase(username)) {
+                    System.out.println("This website and username combo already exist. Would you like to update the password? Y/N");
+                    if (input.next().equalsIgnoreCase("y")) {
+                        System.out.print("What is the new password?\npassword: ");
+                        password = input.next();
+                        websiteDataId = rs.getInt("website_data_id");
 
-                    web.setPassword(new Password(pass));
+                        // TODO: delete old, encrypt new, insert new?
+                        try (PreparedStatement st = connection.prepareStatement("UPDATE website_data SET password = ? " +
+                                "WHERE website_data_id like (?)")) {
+                            st.setString(1, password);
+                            st.setInt(2, websiteDataId);
+                        }
 
-                    System.out.println("The password for website: " + website + " and username: " + user +
-                            " has been updated with " + pass + ".");
-
+                        System.out.println("The password for website: " + website + " and username: " + user +
+                                " has been updated with " + password + ".");
+                    }
                     return;
                 }
-                else return;
             }
         }
 
-        System.out.println("What is the password?");
-        String pass = input.next();
+        System.out.print("What is the password?\npassword: ");
+        password = input.next();
 
-        Website w = new Website(website, new Username(user), new Password(pass));
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT MAX(website_data_id) as id FROM website_data")) {
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) websiteDataId = rs.getInt("id") + 1;
+        }
+        if (websiteDataId == 0) throw new RuntimeException("Error while inserting new password.");
 
-        data.add(w);
+        // TODO: encrypt
+        try (PreparedStatement stmt = connection.prepareStatement("INSERT INTO " +
+                "website_data(website, username, password, website_data_id) VALUES (?, ?, ?, ?)")) {
+            stmt.setString(1, website);
+            stmt.setString(2, username);
+            stmt.setString(3, password);
+            stmt.setInt(4, websiteDataId);
+            stmt.executeUpdate();
+        }
 
-        System.out.println("The website " + website + " with the username " + user +
-                " and password " + pass + " has been added.");
-        System.out.println();
+        try (PreparedStatement stmt = connection.prepareStatement("INSERT INTO passwords(user_id, website_data_id) VALUES(?, ?)")) {
+            stmt.setInt(1, user.getId());
+            stmt.setInt(2, websiteDataId);
+            stmt.executeUpdate();
+        }
+
+        System.out.println("The website " + website + " with the username " + username +
+                " and password " + password + " has been added.");
+    }
+
+    private int getWebsiteDataId(String website, String username) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT * FROM website_data\n" +
+                "LEFT JOIN passwords p on website_data.website_data_id = p.website_data_id\n" +
+                "LEFT JOIN users u on p.user_id = u.id\n" +
+                "WHERE website like (?)\n" +
+                "AND username like (?)\n" +
+                "AND u.id like (?)")) {
+            stmt.setString(1, website);
+            stmt.setString(2, username);
+            stmt.setInt(3, user.getId());
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) return rs.getInt("website_data_id");
+        }
+        return 0;
     }
 
     /**
-     * Deletes a given website and its info
-     * @param data list of websites from file
-     * @param input keyboard
+     * Deletes a given website/username combo and its password
      */
-    private void deleteWebsite(ArrayList<Website> data, Scanner input) {
-        System.out.println();
-        System.out.println("What website should be deleted?");
-        for (Website w : data) { System.out.println(w.toString()); }
-        String response = input.next();
+    private void deleteWebsite() throws SQLException {
+        printAllWebsites();
 
-        Website remove = new Website("", new Username(""), new Password(""));
-        for (Website w : data) {
-            if (response.equalsIgnoreCase(w.toString())) remove = w;
+        System.out.print("Which website?\nwebsite: ");
+        String website = input.next();
+        System.out.print("Which username?\nusername: ");
+        String username = input.next();
+
+        int websiteDataId = getWebsiteDataId(website, username);
+        if (websiteDataId == 0) throw new RuntimeException("Error while deleting website.");
+
+        try (PreparedStatement stmt = connection.prepareStatement("DELETE FROM passwords " +
+                "WHERE user_id like (?) " +
+                "AND website_data_id like (?)")) {
+            stmt.setInt(1, user.getId());
+            stmt.setInt(2, websiteDataId);
+            stmt.executeUpdate();
         }
 
-        data.remove(remove);
-        System.out.println("The website " + response + " was deleted.");
+        try (PreparedStatement stmt = connection.prepareStatement("DELETE FROM website_data " +
+                "WHERE website_data_id like (?)")) {
+            stmt.setInt(1, websiteDataId);
+            stmt.executeUpdate();
+        }
+
+        System.out.println("The website " + website + " was deleted.");
         System.out.println();
     }
 
     /**
      * Deletes the entire list of websites
-     * @param data list of websites from file
-     * @param input keyboard
      */
-    private void deleteAll(ArrayList<Website> data, Scanner input) {
-        System.out.println("Are you sure you want to delete all the websites and their data?");
-        if (input.next().equalsIgnoreCase("no")) return;
-        data.clear();
-        System.out.println("All websites deleted.");
-    }
+    private void deleteAll() throws SQLException {
+        System.out.println("Are you sure you want to delete all the websites and their data? Y/N");
+        if (input.next().equalsIgnoreCase("n")) return;
 
-    /**
-     * Prints all websites and their info to the console
-     * @param data list of websites from file
-     */
-    private void printAllWebsites(ArrayList<Website> data) {
-        System.out.println();
-        for (Website w : data) { System.out.println(w.toStringUserPass()); }
-        System.out.println();
+        List<Integer> websiteIds = new ArrayList<>();
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT * FROM passwords " +
+                "WHERE user_id like (?)")) {
+            stmt.setInt(1, user.getId());
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) {
+                websiteIds.add(rs.getInt("website_data_id"));
+            }
+        }
+
+        try (PreparedStatement stmt = connection.prepareStatement("DELETE FROM passwords " +
+                "WHERE user_id like (?)")) {
+            stmt.setInt(1, user.getId());
+            stmt.executeUpdate();
+        }
+
+        for (int website : websiteIds) {
+            try (PreparedStatement stmt = connection.prepareStatement("DELETE FROM website_data " +
+                    "WHERE website_data_id like (?)")) {
+                stmt.setInt(1, website);
+                stmt.executeUpdate();
+            }
+        }
+
+        System.out.println("All websites for user " + user.getUsername() + " deleted.");
     }
 
     /**
      * Changes the username of a given website and checks if the password needs to be changed
-     * @param data list of websites from file
-     * @param input keyboard
      */
-    private void changeUsername(ArrayList<Website> data, Scanner input) {
-        System.out.println();
-        System.out.println("What is the name of the website?");
-        for (Website w : data) { System.out.println(w.toString()); }
+    private void changeUsername() throws SQLException {
+        printAllWebsites();
+
+        System.out.print("Which website?\nwebsite: ");
         String website = input.next();
 
-        System.out.println("Did the password change as well?");
-        if (input.next().equalsIgnoreCase("yes")) { changeWebsite(data, input, website); return; }
-
-        System.out.println("What is the new username?");
-        String user = input.next();
-
-        for (int index = 0; index < data.size(); ++index) {
-            if (data.get(index).toString().equalsIgnoreCase(website)) {
-                data.get(index).setUsername(new Username(user));
-            }
+        System.out.println("Do you want to change the password as well? Y/N");
+        if (input.next().equalsIgnoreCase("y")) {
+            changeWebsite(website);
+            return;
         }
 
-        System.out.println("Username updated.");
-        System.out.println();
+        System.out.print("What is the old username?\nusername: ");
+        String username = input.next();
+
+        int websiteDataId = getWebsiteDataId(website, username);
+        if (websiteDataId == 0) throw new RuntimeException("Error while updating website.");
+
+        System.out.print("What is the new username?\nusername: ");
+        String user = input.next();
+
+        try (PreparedStatement stmt = connection.prepareStatement("UPDATE website_data SET username = ? " +
+                "WHERE website_data_id like (?)")) {
+            stmt.setString(1, user);
+            stmt.setInt(2, websiteDataId);
+            stmt.executeUpdate();
+        }
+
+        System.out.println("Username updated.\n");
     }
 
     /**
      * Changes the password of a given website and checks if the username needs to changed
-     * @param data list of websites from file
-     * @param input keyboard
      */
-    private void changePassword(ArrayList<Website> data, Scanner input) {
-        System.out.println();
-        System.out.println("What is the name of the website?");
-        for (Website w : data) { System.out.println(w.toString()); }
+    private void changePassword() throws SQLException {
+        printAllWebsites();
+
+        System.out.println("Which website?");
         String website = input.next();
 
-        System.out.println("Did the username change as well?");
-        if (input.next().equalsIgnoreCase("yes")) { changeWebsite(data, input, website); return; }
+        System.out.println("Did the username change as well? Y/N");
+        if (input.next().equalsIgnoreCase("y")) {
+            changeWebsite(website);
+            return;
+        }
+
+        System.out.print("What is the username?\nusername: ");
+        String username = input.next();
+
+        int websiteDataId = getWebsiteDataId(website, username);
+        if (websiteDataId == 0) throw new RuntimeException("Error while updating website.");
 
         System.out.println("What is the new password?");
         String pass = input.next();
 
-        for (int index = 0; index < data.size(); ++index) {
-            if (data.get(index).toString().equalsIgnoreCase(website)) {
-                data.get(index).setPassword(new Password(pass));
-            }
+        // TODO: encryption
+        try (PreparedStatement stmt = connection.prepareStatement("UPDATE website_data SET password = ? " +
+                "WHERE website_data_id like (?)")) {
+            stmt.setString(1, pass);
+            stmt.setInt(2, websiteDataId);
+            stmt.executeUpdate();
         }
 
         System.out.println("Password updated.");
@@ -244,25 +371,37 @@ public class Menu {
 
     /**
      * Called when both the username and password need to be updated
-     * @param data list of websites from file
-     * @param input keyboard
+     *
      * @param website to be changed
      */
-    private void changeWebsite(ArrayList<Website> data, Scanner input, String website) {
-        System.out.println();
-        System.out.println("What is the new username?");
+    private void changeWebsite(String website) throws SQLException {
+        System.out.println("\nWhat is the old username?\nusername: ");
+        String username = input.next();
+
+        int websiteDataId = getWebsiteDataId(website, username);
+        if (websiteDataId == 0) throw new RuntimeException("Error while updating website.");
+
+        System.out.println("What is the new username?\nusername: ");
         String user = input.next();
-        System.out.println("What is the new password?");
+        System.out.println("What is the new password?\npassword: ");
         String pass = input.next();
 
-        for (int index = 0; index < data.size(); ++index) {
-            if (data.get(index).toString().equalsIgnoreCase(website)) {
-                data.get(index).setPassword(new Password(pass));
-                data.get(index).setUsername(new Username(user));
-            }
+        try (PreparedStatement stmt = connection.prepareStatement("UPDATE website_data SET username = ? " +
+                "WHERE website_data_id like (?)")) {
+            stmt.setString(1, user);
+            stmt.setInt(2, websiteDataId);
+            stmt.executeUpdate();
         }
 
-        System.out.println("Username and Password updated.");
+        // TODO: encryption
+        try (PreparedStatement stmt = connection.prepareStatement("UPDATE website_data SET password = ? " +
+                "WHERE website_data_id like (?)")) {
+            stmt.setString(1, pass);
+            stmt.setInt(2, websiteDataId);
+            stmt.executeUpdate();
+        }
+
+        System.out.println("Username and password updated.");
         System.out.println();
     }
 }

@@ -1,9 +1,9 @@
 package me.haleykell;
 
-import me.haleykell.userdata.Website;
+import me.haleykell.userdata.User;
+import org.springframework.security.crypto.password.Pbkdf2PasswordEncoder;
 
 import java.sql.*;
-import java.util.ArrayList;
 import java.util.Scanner;
 
 /**
@@ -27,53 +27,91 @@ public class Driver {
                 ResultSet tables = meta.getTables(null, null, "versions", null);
                 if (tables.next()) {
                     // Database exists
-                    try (Statement stmt = conn.createStatement();
-                         ResultSet rs = stmt.executeQuery("SELECT * FROM versions")) {
+                    try (PreparedStatement stmt = conn.prepareStatement("SELECT MAX(version) as version FROM versions")) {
+                        ResultSet rs = stmt.executeQuery();
                         if (rs.next()) System.out.println("Database found. Version: " + rs.getInt("version"));
-                    } catch (SQLException e) {
-                        System.out.println(e.getMessage());
                     }
-                } else { // Create tables
-                    String version = "CREATE TABLE versions (version integer PRIMARY KEY);";
-                    try (Statement st = conn.createStatement()) {
-                        st.execute(version);
-                        String in = "INSERT INTO versions(version) VALUES(?)";
-                        try (PreparedStatement pstmt = conn.prepareStatement(in)) {
-                            pstmt.setInt(1, 1);
-                            pstmt.executeUpdate();
-                            System.out.println("Version inserted.");
-                        } catch (SQLException e) {
-                            System.out.println(e.getMessage());
-                        }
-                    } catch (SQLException e) {
-                        System.out.println(e.getMessage());
-                    }
-
-                    // TODO: Create User table
-
-
-                    // TODO: Create Website table
-
-
-                    // TODO: Create WebsiteUser table
-
-
-                    System.out.println("Database created.");
+                } else {
+                    createTables(conn);
+                    System.out.println("Database initialized.");
                 }
+
+                Scanner input = new Scanner(System.in);
+                User user;
+                Pbkdf2PasswordEncoder pwEncoder = new Pbkdf2PasswordEncoder();
+                pwEncoder.setAlgorithm(Pbkdf2PasswordEncoder.SecretKeyFactoryAlgorithm.PBKDF2WithHmacSHA256);
+
+                System.out.println("Are you a new user? Y/N");
+                String yn = input.next();
+                if (yn.equalsIgnoreCase("y")) user = User.registerNewUser(conn, input, pwEncoder);
+                else user = User.login(conn, input, pwEncoder);
+
+                if (user == null) throw new RuntimeException("Error while logging in.");
+                System.out.println("User " + user.getUsername() + " is now logged in.");
+
+                Menu menu = new Menu(conn, input, user);
+                menu.menu();
             }
         } catch (SQLException e) {
             System.out.println(e.getMessage());
         }
 
-        DataFile data = new DataFile();
-        ArrayList<Website> dataList = data.getData();
-
-        Menu menu = new Menu();
-
-        Scanner input = new Scanner(System.in);
-        menu.menu(dataList, input);
-
-        data.writeFile(dataList);
         System.out.println("Data saved.");
+    }
+
+    public static void createTables(Connection conn) throws SQLException {
+        // Create tables
+        try (PreparedStatement stmt = conn.prepareStatement("CREATE TABLE versions (version integer)")) {
+            stmt.executeUpdate();
+            try (PreparedStatement st = conn.prepareStatement("INSERT INTO versions(version) VALUES(?)")) {
+                st.setInt(1, 1);
+                st.executeUpdate();
+            }
+            System.out.println("Database versions table created.");
+        }
+
+        // Create users table
+        try (PreparedStatement stmt = conn.prepareStatement("CREATE TABLE users\n" +
+                "(\n" +
+                "    id                   INTEGER      NOT NULL,\n" +
+                "    username             VARCHAR(128) NOT NULL,\n" +
+                "    email                VARCHAR(128) NOT NULL,\n" +
+                "\n" +
+                "    master_password_hash BINARY       NOT NULL,\n" +
+                "    password_key         BINARY       NOT NULL,\n" +
+                "\n" +
+                "    PRIMARY KEY (id)\n" +
+                ")")) {
+            stmt.executeUpdate();
+            System.out.println("User table created.");
+        }
+
+        // Create website data table
+        try (PreparedStatement stmt = conn.prepareStatement("CREATE TABLE website_data\n" +
+                "(\n" +
+                "    website_data_id INTEGER      NOT NULL,\n" +
+                "    website         VARCHAR(512) NOT NULL,\n" +
+                "    username        VARCHAR(128) NOT NULL,\n" +
+                "    password        BINARY       NOT NULL,\n" +
+                "\n" +
+                "    PRIMARY KEY (website_data_id)\n" +
+                ")")) {
+            stmt.executeUpdate();
+            System.out.println("Website data table created.");
+        }
+
+        // Create passwords table
+        try (PreparedStatement stmt = conn.prepareStatement("CREATE TABLE passwords\n" +
+                "(\n" +
+                "    user_id         INTEGER NOT NULL,\n" +
+                "    website_data_id INTEGER NOT NULL,\n" +
+                "\n" +
+                "    PRIMARY KEY (user_id, website_data_id),\n" +
+                "    FOREIGN KEY (user_id) REFERENCES users (id),\n" +
+                "    FOREIGN KEY (website_data_id) REFERENCES website_data (website_data_id)\n" +
+                ")")) {
+            stmt.executeUpdate();
+            System.out.println("Website data table created.");
+        }
     }
 }
