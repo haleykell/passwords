@@ -2,10 +2,18 @@ package me.haleykell.userdata;
 
 import org.springframework.security.crypto.password.Pbkdf2PasswordEncoder;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.UnsupportedEncodingException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Random;
 import java.util.Scanner;
 
 public class User {
@@ -16,46 +24,13 @@ public class User {
     private String decryptedKey;
     private int id;
 
-    public User(String username, String email, String hashedPassword, String encryptedKey, int id) {
+    public User(String username, String email, String hashedPassword, String encryptedKey, int id, String decryptedKey) {
         this.username = username;
         this.email = email;
         this.hashedPassword = hashedPassword;
         this.encryptedKey = encryptedKey;
         this.id = id;
-    }
-
-    public String getUsername() {
-        return username;
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public String getHashedPassword() {
-        return hashedPassword;
-    }
-
-    public String getEncryptedKey() {
-        return encryptedKey;
-    }
-
-    public int getId() {
-        return id;
-    }
-
-    private void insertUser(Connection conn) throws SQLException {
-        try (PreparedStatement stmt = conn.prepareStatement("INSERT INTO users(id, username, email, master_password_hash, password_key) VALUES(?,?,?,?,?)")) {
-            stmt.setInt(1, this.id);
-            stmt.setString(2, this.username);
-            stmt.setString(3, this.email);
-            stmt.setString(4, this.hashedPassword);
-            stmt.setString(5, this.encryptedKey);
-            stmt.executeUpdate();
-        } catch (SQLException e) {
-            System.out.println("Error inserting new user.");
-            throw e;
-        }
+        this.decryptedKey = decryptedKey;
     }
 
     public static User registerNewUser(Connection conn, Scanner input, Pbkdf2PasswordEncoder pwEncoder) throws SQLException {
@@ -85,10 +60,27 @@ public class User {
             if (rs.next()) id = rs.getInt("id") + 1;
         }
 
-        // TODO
-        String encryptedKey = "";
+        String alphaNum = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+        StringBuilder salt = new StringBuilder();
+        Random rand = new Random();
+        while (salt.length() <= 18) { // length of the random string.
+            int index = (int) (rand.nextFloat() * alphaNum.length());
+            salt.append(alphaNum.charAt(index));
+        }
 
-        User user = new User(username, email, hashedPassword, encryptedKey, id);
+        String decryptedKey = salt.toString();
+        String encryptedKey = "";
+        SecretKeySpec secretKey = getKey(password);
+
+        try {
+            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+            encryptedKey = Base64.getEncoder().encodeToString(cipher.doFinal(decryptedKey.getBytes("UTF-8")));
+        } catch (Exception e) {
+            System.out.println("Error while encrypting: " + e.toString());
+        }
+
+        User user = new User(username, email, hashedPassword, encryptedKey, id, decryptedKey);
         user.insertUser(conn);
         return user;
     }
@@ -111,10 +103,62 @@ public class User {
                 String hashedPassword = rs.getString("master_password_hash");
                 String email = rs.getString("email");
                 int id = rs.getInt("id");
+
                 String encryptedKey = rs.getString("password_key");
-                return new User(username, email, hashedPassword, encryptedKey, id);
+                String decryptedKey = "";
+                SecretKeySpec secretKey = getKey(password);
+
+                try {
+                    Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5PADDING");
+                    cipher.init(Cipher.DECRYPT_MODE, secretKey);
+                    decryptedKey = new String(cipher.doFinal(Base64.getDecoder().decode(encryptedKey)));
+                } catch (Exception e) {
+                    System.out.println("Error while decrypting: " + e.toString());
+                }
+
+                return new User(username, email, hashedPassword, encryptedKey, id, decryptedKey);
             }
         }
         return null;
+    }
+
+    public static SecretKeySpec getKey(String myKey) {
+        MessageDigest sha = null;
+        try {
+            byte[] key = myKey.getBytes("UTF-8");
+            sha = MessageDigest.getInstance("SHA-1");
+            key = sha.digest(key);
+            key = Arrays.copyOf(key, 16);
+            return new SecretKeySpec(key, "AES");
+        } catch (NoSuchAlgorithmException | UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    public String getUsername() { return username; }
+
+    public String getEmail() { return email; }
+
+    public String getHashedPassword() { return hashedPassword; }
+
+    public String getEncryptedKey() { return encryptedKey; }
+
+    public String getDecryptedKey() { return decryptedKey; }
+
+    public int getId() { return id; }
+
+    private void insertUser(Connection conn) throws SQLException {
+        try (PreparedStatement stmt = conn.prepareStatement("INSERT INTO users(id, username, email, master_password_hash, password_key) VALUES(?,?,?,?,?)")) {
+            stmt.setInt(1, this.id);
+            stmt.setString(2, this.username);
+            stmt.setString(3, this.email);
+            stmt.setString(4, this.hashedPassword);
+            stmt.setString(5, this.encryptedKey);
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            System.out.println("Error inserting new user.");
+            throw e;
+        }
     }
 }

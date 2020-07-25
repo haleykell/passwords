@@ -2,11 +2,15 @@ package me.haleykell;
 
 import me.haleykell.userdata.User;
 
+import javax.crypto.Cipher;
+import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Scanner;
 
@@ -27,7 +31,7 @@ public class Menu {
     private static final int CHANGE_PASS = 5;
     private static final int QUIT = 8;
     private static final int PRINT_ALL = 7;
-    private static final int DELETE_ALL = 6;
+    private static final int DELETE_USER = 6;
     private Connection connection;
     private Scanner input;
     private User user;
@@ -64,8 +68,8 @@ public class Menu {
                 case CHANGE_PASS:
                     changePassword();
                     break;
-                case DELETE_ALL:
-                    deleteAll();
+                case DELETE_USER:
+                    deleteUser();
                     break;
                 case PRINT_ALL:
                     printAllWebsites();
@@ -92,13 +96,11 @@ public class Menu {
         System.out.println("3. Delete a website's username and password from the database.");
         System.out.println("4. Change a username for a website.");
         System.out.println("5. Change a password for a website");
-        System.out.println("6. Delete all websites, usernames, and passwords.");
-        System.out.println("7. Print all usernames and passwords in the database.");
+        System.out.println("6. Delete your user. WARNING: This will delete all of your saved usernames and passwords.");
+        System.out.println("7. Print all websites and usernames in the database.");
         System.out.println("8. Quit.");
 
-        int response = input.nextInt();
-
-        return response;
+        return input.nextInt();
     }
 
     public void printAllWebsites() throws SQLException {
@@ -135,9 +137,17 @@ public class Menu {
             stmt.setInt(2, this.user.getId());
             stmt.setString(3, username);
             ResultSet rs = stmt.executeQuery();
+            String password;
             if (rs.next()) {
-                // TODO: decryption
-                System.out.println("password: " + rs.getString("password"));
+                SecretKey key = User.getKey(user.getDecryptedKey());
+                try {
+                    Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5PADDING");
+                    cipher.init(Cipher.DECRYPT_MODE, key);
+                    password = new String(cipher.doFinal(Base64.getDecoder().decode(rs.getString("password"))));
+                    System.out.println("password: " + password);
+                } catch (Exception e) {
+                    System.out.println("Error while decrypting: " + e.toString());
+                }
             } else System.out.println("No passwords found.");
         } catch (SQLException e) {
             System.out.println("Error while retrieving password.");
@@ -167,20 +177,37 @@ public class Menu {
             ResultSet rs = stmt.executeQuery();
             if (rs.next()) {
                 if (rs.getString("username").equalsIgnoreCase(username)) {
-                    System.out.println("This website and username combo already exist. Would you like to update the password? Y/N");
+                    System.out.println("This website and username combo already exists. Would you like to update the password? Y/N");
                     if (input.next().equalsIgnoreCase("y")) {
                         System.out.print("What is the new password?\npassword: ");
                         password = input.next();
                         websiteDataId = rs.getInt("website_data_id");
-
-                        // TODO: delete old, encrypt new, insert new?
-                        try (PreparedStatement st = connection.prepareStatement("UPDATE website_data SET password = ? " +
+                        try (PreparedStatement st = connection.prepareStatement("DELETE FROM website_data " +
                                 "WHERE website_data_id like (?)")) {
-                            st.setString(1, password);
-                            st.setInt(2, websiteDataId);
+                            st.setInt(1, websiteDataId);
+                            st.executeUpdate();
                         }
 
-                        System.out.println("The password for website: " + website + " and username: " + user +
+                        SecretKey key = User.getKey(user.getDecryptedKey());
+                        String encryptedPass = "";
+                        try {
+                            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+                            cipher.init(Cipher.ENCRYPT_MODE, key);
+                            encryptedPass = Base64.getEncoder().encodeToString(cipher.doFinal(password.getBytes(StandardCharsets.UTF_8)));
+                        } catch (Exception e) {
+                            System.out.println("Error while encrypting: " + e.toString());
+                        }
+
+                        try (PreparedStatement st = connection.prepareStatement("INSERT INTO " +
+                                "website_data(website, username, password, website_data_id) VALUES (?, ?, ?, ?)")) {
+                            st.setString(1, website);
+                            st.setString(2, username);
+                            st.setString(3, encryptedPass);
+                            st.setInt(4, websiteDataId);
+                            st.executeUpdate();
+                        }
+
+                        System.out.println("The password for website: " + website + " and username: " + user.getUsername() +
                                 " has been updated with " + password + ".");
                     }
                     return;
@@ -197,12 +224,21 @@ public class Menu {
         }
         if (websiteDataId == 0) throw new RuntimeException("Error while inserting new password.");
 
-        // TODO: encrypt
+        SecretKey key = User.getKey(user.getDecryptedKey());
+        String encryptedPass = "";
+        try {
+            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, key);
+            encryptedPass = Base64.getEncoder().encodeToString(cipher.doFinal(password.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            System.out.println("Error while encrypting: " + e.toString());
+        }
+
         try (PreparedStatement stmt = connection.prepareStatement("INSERT INTO " +
                 "website_data(website, username, password, website_data_id) VALUES (?, ?, ?, ?)")) {
             stmt.setString(1, website);
             stmt.setString(2, username);
-            stmt.setString(3, password);
+            stmt.setString(3, encryptedPass);
             stmt.setInt(4, websiteDataId);
             stmt.executeUpdate();
         }
@@ -222,7 +258,7 @@ public class Menu {
                 "LEFT JOIN passwords p on website_data.website_data_id = p.website_data_id\n" +
                 "LEFT JOIN users u on p.user_id = u.id\n" +
                 "WHERE website like (?)\n" +
-                "AND username like (?)\n" +
+                "AND website_data.username like (?)\n" +
                 "AND u.id like (?)")) {
             stmt.setString(1, website);
             stmt.setString(2, username);
@@ -268,8 +304,8 @@ public class Menu {
     /**
      * Deletes the entire list of websites
      */
-    private void deleteAll() throws SQLException {
-        System.out.println("Are you sure you want to delete all the websites and their data? Y/N");
+    private void deleteUser() throws SQLException {
+        System.out.println("Are you sure you want to delete your user? Y/N");
         if (input.next().equalsIgnoreCase("n")) return;
 
         List<Integer> websiteIds = new ArrayList<>();
@@ -296,7 +332,14 @@ public class Menu {
             }
         }
 
-        System.out.println("All websites for user " + user.getUsername() + " deleted.");
+        try (PreparedStatement stmt = connection.prepareStatement("DELETE FROM users " +
+                "WHERE id like (?)")) {
+            stmt.setInt(1, user.getId());
+            stmt.executeUpdate();
+        }
+
+        System.out.println("User " + user.getUsername() + " deleted.");
+        System.exit(0);
     }
 
     /**
@@ -357,12 +400,29 @@ public class Menu {
         System.out.println("What is the new password?");
         String pass = input.next();
 
-        // TODO: encryption
-        try (PreparedStatement stmt = connection.prepareStatement("UPDATE website_data SET password = ? " +
+        try (PreparedStatement st = connection.prepareStatement("DELETE FROM website_data " +
                 "WHERE website_data_id like (?)")) {
-            stmt.setString(1, pass);
-            stmt.setInt(2, websiteDataId);
-            stmt.executeUpdate();
+            st.setInt(1, websiteDataId);
+            st.executeUpdate();
+        }
+
+        SecretKey key = User.getKey(user.getDecryptedKey());
+        String encryptedPass = "";
+        try {
+            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, key);
+            encryptedPass = Base64.getEncoder().encodeToString(cipher.doFinal(pass.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            System.out.println("Error while encrypting: " + e.toString());
+        }
+
+        try (PreparedStatement st = connection.prepareStatement("INSERT INTO " +
+                "website_data(website, username, password, website_data_id) VALUES (?, ?, ?, ?)")) {
+            st.setString(1, website);
+            st.setString(2, username);
+            st.setString(3, encryptedPass);
+            st.setInt(4, websiteDataId);
+            st.executeUpdate();
         }
 
         System.out.println("Password updated.");
@@ -386,22 +446,32 @@ public class Menu {
         System.out.println("What is the new password?\npassword: ");
         String pass = input.next();
 
-        try (PreparedStatement stmt = connection.prepareStatement("UPDATE website_data SET username = ? " +
+        try (PreparedStatement st = connection.prepareStatement("DELETE FROM website_data " +
                 "WHERE website_data_id like (?)")) {
-            stmt.setString(1, user);
-            stmt.setInt(2, websiteDataId);
-            stmt.executeUpdate();
+            st.setInt(1, websiteDataId);
+            st.executeUpdate();
         }
 
-        // TODO: encryption
-        try (PreparedStatement stmt = connection.prepareStatement("UPDATE website_data SET password = ? " +
-                "WHERE website_data_id like (?)")) {
-            stmt.setString(1, pass);
-            stmt.setInt(2, websiteDataId);
-            stmt.executeUpdate();
+        SecretKey key = User.getKey(this.user.getDecryptedKey());
+        String encryptedPass = "";
+        try {
+            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, key);
+            encryptedPass = Base64.getEncoder().encodeToString(cipher.doFinal(pass.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            System.out.println("Error while encrypting: " + e.toString());
         }
 
-        System.out.println("Username and password updated.");
+        try (PreparedStatement st = connection.prepareStatement("INSERT INTO " +
+                "website_data(website, username, password, website_data_id) VALUES (?, ?, ?, ?)")) {
+            st.setString(1, website);
+            st.setString(2, user);
+            st.setString(3, encryptedPass);
+            st.setInt(4, websiteDataId);
+            st.executeUpdate();
+        }
+
+        System.out.println(website + " and " + username + " updated with username " + user + " and password " + pass + ".");
         System.out.println();
     }
 }
