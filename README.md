@@ -3,6 +3,17 @@
 This project is a simple password manager with secure storage in an SQLite database with password encryption.
 User login is secured using Spring Security Crypto and saved passwords are encrypted using the Java Cipher library.
 
+## Table of contents
+
+[Demo](#demo)<br>
+[Features](#features)<br>
+[Database Design](#database-design)<br>
+[Security Design](#security-design)<br>
+[Development Timeline](#development-timeline)<br>
+[Problems I Faced](#problems-i-faced)<br>
+[Potential Improvements](#potential-improvements)<br>
+[Installation and Usage](#installation-and-usage)
+
 ## Demo
 
 <img src="http://g.recordit.co/VicCRS6paT.gif" alt="Demo">
