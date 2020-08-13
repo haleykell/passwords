@@ -4,3 +4,4 @@ out/
 doc/
 /target/
 /sqlite/
+dependency-reduced-pom.xml
